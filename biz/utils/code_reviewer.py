@@ -2,7 +2,6 @@ import os
 import re
 import yaml
 import abc
-from typing import Dict, Any, List
 
 from biz.utils.log import logger
 from biz.llm.factory import Factory
@@ -14,83 +13,46 @@ class BaseReviewer(abc.ABC):
 
     def __init__(self, prompt_key: str):
         self.client = Factory().getClient()
-        self.prompts = self._load_prompts(prompt_key)
+        self.prompts = self._load_prompts()
 
-    def _load_prompts(self, prompt_key: str) -> Dict[str, Any]:
+    def _load_prompts(self) -> dict:
         """加载提示词配置"""
         prompt_templates_file = "conf/prompt_templates.yml"
-        try:
-            # 在打开 YAML 文件时显式指定编码为 UTF-8，避免使用系统默认的 GBK 编码。
-            with open(prompt_templates_file, "r", encoding="utf-8") as file:
-                prompts = yaml.safe_load(file).get(prompt_key, {})
-                system_prompt = prompts.get("system_prompt")
-                user_prompt = prompts.get("user_prompt")
+        with open(prompt_templates_file, "r") as file:
+            prompt_templates = yaml.safe_load(file)
+            system_prompt = prompt_templates['system_prompt']
+            user_prompt = prompt_templates['user_prompt']
 
-                if not system_prompt or not user_prompt:
-                    raise ValueError(f"提示词配置 `{prompt_key}` 为空或格式不正确")
+        if not system_prompt or not user_prompt:
+            logger.warning(f"未找到提示词配置{prompt_templates_file}")
+            # 抛出异常
+            raise Exception(f"未找到提示词配置{prompt_templates_file},或配置格式不正确")
 
-                return {
-                    "system_message": {"role": "system", "content": system_prompt},
-                    "user_message": {"role": "user", "content": user_prompt},
+        return {
+            "code_review": {
+                "system_message": {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                "user_message": {
+                    "role": "user",
+                    "content": user_prompt
                 }
-        except (FileNotFoundError, KeyError, yaml.YAMLError) as e:
-            logger.error(f"加载提示词配置失败: {e}")
-            raise Exception(f"提示词配置加载失败: {e}")
-
-    def call_llm(self, messages: List[Dict[str, Any]]) -> str:
-        """调用 LLM 进行代码审核"""
-        logger.info(f"向 AI 发送代码 Review 请求, messages: {messages}")
-        review_result = self.client.completions(messages=messages)
-        logger.info(f"收到 AI 返回结果: {review_result}")
-        return review_result
-
-    @abc.abstractmethod
-    def review_code(self, *args, **kwargs) -> str:
-        """抽象方法，子类必须实现"""
-        pass
-
-
-class CodeReviewer(BaseReviewer):
-    """代码 Diff 级别的审查"""
-
-    def __init__(self):
-        super().__init__("code_review_prompt")
-
-    def review_and_strip_code(self, changes_text: str, commits_text: str = "") -> str:
-        """
-        Review判断changes_text超出取前REVIEW_MAX_TOKENS个token，超出则截断changes_text，
-        调用review_code方法，返回review_result，如果review_result是markdown格式，则去掉头尾的```
-        :param changes_text:
-        :param commits_text:
-        :return:
-        """
-        # 如果超长，取前REVIEW_MAX_TOKENS个token
-        review_max_tokens = int(os.getenv("REVIEW_MAX_TOKENS", 10000))
-        # 如果changes为空,打印日志
-        if not changes_text:
-            logger.info("代码为空, diffs_text = %", str(changes_text))
-            return "代码为空"
-
-        # 计算tokens数量，如果超过REVIEW_MAX_TOKENS，截断changes_text
-        tokens_count = count_tokens(changes_text)
-        if tokens_count > review_max_tokens:
-            changes_text = truncate_text_by_tokens(changes_text, review_max_tokens)
-
-        review_result = self.review_code(changes_text, commits_text).strip()
-        if review_result.startswith("```markdown") and review_result.endswith("```"):
-            return review_result[11:-3].strip()
-        return review_result
+            }
+        }
 
     def review_code(self, diffs_text: str, commits_text: str = "") -> str:
-        """Review 代码并返回结果"""
+        """Review代码，并返回结果"""
+        prompts = self.prompts["code_review"]
         messages = [
-            self.prompts["system_message"],
+            prompts["system_message"],
             {
                 "role": "user",
-                "content": self.prompts["user_message"]["content"].format(
-                    diffs_text=diffs_text, commits_text=commits_text
-                ),
-            },
+                "content": prompts["user_message"]["content"].format(
+                    diffs_text=diffs_text,
+                    commits_text=commits_text
+                )
+            }
         ]
         return self.call_llm(messages)
 
