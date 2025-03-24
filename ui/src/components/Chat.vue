@@ -25,6 +25,20 @@
           <div v-if="message.role === 'assistant'" class="avatar">🤖</div>
           <div v-else class="avatar">👤</div>
           <div class="text" v-html="renderMarkdown(message.content)"></div>
+          <div v-if="message.role === 'assistant'" class="message-actions">
+            <el-dropdown trigger="click" @command="handleCommand($event, message)">
+              <span class="el-dropdown-link">
+                <span class="dots">...</span>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="copy-markdown">复制 Markdown</el-dropdown-item>
+                  <el-dropdown-item command="copy-rendered">复制渲染内容</el-dropdown-item>
+                  <el-dropdown-item command="download">下载原文</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
         </div>
       </div>
     </div>
@@ -253,6 +267,31 @@ export default {
         console.error('Markdown rendering error:', e)
         return content || ''
       }
+    },
+    handleCommand(command, message) {
+      switch (command) {
+        case 'copy-markdown':
+          navigator.clipboard.writeText(message.content)
+          ElMessage.success('已复制 Markdown 内容')
+          break
+        case 'copy-rendered':
+          const renderedContent = this.renderMarkdown(message.content)
+          navigator.clipboard.writeText(renderedContent)
+          ElMessage.success('已复制渲染内容')
+          break
+        case 'download':
+          const blob = new Blob([message.content], { type: 'text/markdown' })
+          const url = window.URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `message-${new Date().toISOString()}.md`
+          document.body.appendChild(a)
+          a.click()
+          window.URL.revokeObjectURL(url)
+          document.body.removeChild(a)
+          ElMessage.success('已下载原文')
+          break
+      }
     }
   },
   mounted() {
@@ -379,6 +418,7 @@ export default {
   align-items: flex-start;
   gap: 12px;
   max-width: 80%;
+  position: relative;
 }
 
 .user-message .message-content {
@@ -548,5 +588,41 @@ textarea {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.message-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-left: 8px;
+}
+
+.dots {
+  cursor: pointer;
+  font-size: 20px;
+  color: #666;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.3s;
+  opacity: 0.7;
+}
+
+.dots:hover {
+  background-color: #f0f0f0;
+  opacity: 1;
+}
+
+.el-dropdown-link {
+  cursor: pointer;
+  color: #409EFF;
+}
+
+:deep(.el-dropdown-menu__item) {
+  padding: 8px 16px;
+  font-size: 14px;
+}
+
+:deep(.el-dropdown-menu__item:hover) {
+  background-color: #f5f7fa;
 }
 </style>
