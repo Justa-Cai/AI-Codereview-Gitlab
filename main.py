@@ -959,6 +959,7 @@ def chat():
         system_message = data.get('system_message', '')
         user_message = data.get('user_message', '')
         use_context = data.get('use_context', False)
+        history_messages = data.get('history_messages', [])
         temperature = float(data.get('temperature', 0.7))
         max_tokens = data.get('max_tokens')
         
@@ -966,6 +967,7 @@ def chat():
         logger.info("Chat API - Original request message: %s", message)
         logger.info("Chat API - System message: %s", system_message)
         logger.info("Chat API - User message template: %s", user_message)
+        logger.info("Chat API - History messages: %s", json.dumps(history_messages, ensure_ascii=False))
         
         def generate():
             try:
@@ -976,6 +978,10 @@ def chat():
                 messages = []
                 if system_message:
                     messages.append({"role": "system", "content": system_message})
+                
+                # 添加历史消息
+                if use_context and history_messages:
+                    messages.extend(history_messages)
                 
                 # 如果提供了 user_message 模板，使用模板格式化消息
                 if user_message:

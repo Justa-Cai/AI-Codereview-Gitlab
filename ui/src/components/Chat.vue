@@ -152,6 +152,13 @@ export default {
       this.isLoading = true
 
       try {
+        // 构建历史消息
+        const historyMessages = this.useContext ? 
+          this.messages.slice(0, -1).map(msg => ({
+            role: msg.role,
+            content: msg.content
+          })) : []
+
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: {
@@ -161,7 +168,8 @@ export default {
             message: userMessage,
             system_message: this.promptConfig.system_message,
             user_message: this.promptConfig.user_message,
-            use_context: this.useContext
+            use_context: this.useContext,
+            history_messages: historyMessages
           })
         })
 
@@ -288,7 +296,6 @@ export default {
           document.body.appendChild(a)
           a.click()
           window.URL.revokeObjectURL(url)
-          document.body.removeChild(a)
           ElMessage.success('已下载原文')
           break
       }
@@ -426,6 +433,10 @@ export default {
   flex-direction: row-reverse;
 }
 
+.assistant-message .message-content {
+  padding-bottom: 0;
+}
+
 .avatar {
   font-size: 24px;
   min-width: 40px;
@@ -443,6 +454,9 @@ export default {
   background-color: #f0f0f0;
   word-wrap: break-word;
   line-height: 1.5;
+  position: relative;
+  display: inline-flex;
+  align-items: flex-start;
 }
 
 .text :deep(p) {
@@ -591,25 +605,30 @@ textarea {
 }
 
 .message-actions {
-  position: relative;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  margin-left: 8px;
+  margin-left: 4px;
+  align-self: flex-end;
+}
+
+.user-message .message-actions {
+  display: none;
 }
 
 .dots {
   cursor: pointer;
-  font-size: 20px;
+  font-size: 16px;
   color: #666;
-  padding: 4px 8px;
+  padding: 2px 6px;
   border-radius: 4px;
-  transition: background-color 0.3s;
+  transition: all 0.3s;
   opacity: 0.7;
+  line-height: 1;
 }
 
 .dots:hover {
-  background-color: #f0f0f0;
   opacity: 1;
+  background-color: rgba(0, 0, 0, 0.05);
 }
 
 .el-dropdown-link {
