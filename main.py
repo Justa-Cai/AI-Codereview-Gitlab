@@ -117,7 +117,6 @@ def setup_scheduler():
 
         # Start the scheduler
         scheduler.start()
-        logger.info("Scheduler started successfully.")
 
         # Shut down the scheduler when exiting the app
         atexit.register(lambda: scheduler.shutdown())
@@ -313,10 +312,9 @@ def handle_webhook():
             return jsonify({"error": "Invalid JSON"}), 400
 
         object_kind = data.get("object_kind")
-        print("Request Headers:")
-        for key, value in request.headers.items():
-            print(f"  {key}: {value}")
-        print(data)
+        logger.info(f"Received webhook event: {object_kind}")
+        logger.info("Request Headers: %s", json.dumps(dict(request.headers)))
+        logger.info("Request data: %s", json.dumps(data))
 
         # 优先从请求头获取，如果没有，则从环境变量获取，如果没有，则从推送事件中获取
         gitlab_url = os.getenv('GITLAB_URL') or request.headers.get('X-Gitlab-Instance')
@@ -330,7 +328,7 @@ def handle_webhook():
             try:
                 parsed_url = urlparse(homepage)
                 gitlab_url = f"{parsed_url.scheme}://{parsed_url.netloc}/"
-                print(gitlab_url)
+                logger.info("Parsed GitLab URL from homepage: %s", gitlab_url)
             except Exception as e:
                 return jsonify({"error": f"Failed to parse homepage URL: {str(e)}"}), 400
 
@@ -340,21 +338,20 @@ def handle_webhook():
         if not gitlab_token:
             return jsonify({'message': 'Missing GitLab access token'}), 400
 
-        # 打印整个payload数据，或根据需求进行处理
-        logger.info(f'Received event: {object_kind}')
-        logger.info(f'Payload: {json.dumps(data)}')
+        gitlab_url_slug = slugify_url(gitlab_url)
+        logger.info("Using GitLab URL slug: %s", gitlab_url_slug)
 
         # 处理Merge Request Hook
         if object_kind == "merge_request":
             # 创建一个新进程进行异步处理
-            process = Process(target=__handle_merge_request_event, args=(data, gitlab_token, gitlab_url))
+            process = Process(target=__handle_merge_request_event, args=(data, gitlab_token, gitlab_url, gitlab_url_slug))
             process.start()
             # 立马返回响应
             return jsonify(
                 {'message': f'Request received(object_kind={object_kind}), will process asynchronously.'}), 200
         elif object_kind == "push":
             # 创建一个新进程进行异步处理
-            process = Process(target=__handle_push_event, args=(data, gitlab_token, gitlab_url))
+            process = Process(target=__handle_push_event, args=(data, gitlab_token, gitlab_url, gitlab_url_slug))
             process.start()
             # 立马返回响应
             return jsonify(
@@ -385,7 +382,7 @@ def slugify_url(original_url: str) -> str:
     return target
 
 
-def __handle_push_event(webhook_data: dict, gitlab_token: str, gitlab_url: str):
+def __handle_push_event(webhook_data: dict, gitlab_token: str, gitlab_url: str, gitlab_url_slug: str):
     try:
         handler = PushHandler(webhook_data, gitlab_token, gitlab_url)
         logger.info('Push Hook event received')
@@ -422,7 +419,7 @@ def __handle_push_event(webhook_data: dict, gitlab_token: str, gitlab_url: str):
             commits=commits,
             score=score,
             review_result=review_result,
-            gitlab_url_slug = slugify_url(gitlab_url),
+            gitlab_url_slug=gitlab_url_slug,
         ))
 
     except Exception as e:
@@ -431,12 +428,13 @@ def __handle_push_event(webhook_data: dict, gitlab_token: str, gitlab_url: str):
         logger.error('出现未知错误: %s', error_message)
 
 
-def __handle_merge_request_event(webhook_data: dict, gitlab_token: str, gitlab_url: str):
+def __handle_merge_request_event(webhook_data: dict, gitlab_token: str, gitlab_url: str, gitlab_url_slug: str):
     '''
     处理Merge Request Hook事件
     :param webhook_data:
     :param gitlab_token:
     :param gitlab_url:
+    :param gitlab_url_slug:
     :return:
     '''
     try:
@@ -482,7 +480,7 @@ def __handle_merge_request_event(webhook_data: dict, gitlab_token: str, gitlab_u
                     score=CodeReviewer.parse_review_score(review_text=review_result),
                     url=webhook_data['object_attributes']['url'],
                     review_result=review_result,
-                    gitlab_url_slug = slugify_url(gitlab_url),
+                    gitlab_url_slug=gitlab_url_slug,
                 )
             )
 
@@ -524,16 +522,11 @@ def review_code(changes_text: str, commits_text: str = '') -> str:
 
     if len(changes_text) > review_max_length:
         changes_text = changes_text[:review_max_length]
-        logger.info(f'文本超长，截段后content: {changes_text}')
 
     # 获取启用的评审者列表
     enabled_agents = os.getenv('ENABLED_AGENTS', '').split(',')
     if not enabled_agents or enabled_agents[0] == '':
         enabled_agents = ['code_reviewer']  # 默认使用 code_reviewer
-
-    logger.info(f"Enabled agents: {enabled_agents}")
-    logger.info(f"Changes text type: {type(changes_text)}")
-    logger.info(f"Changes text content: {changes_text}")
 
     # 按顺序进行代码评审
     all_reviews = []
@@ -566,7 +559,6 @@ def review_code(changes_text: str, commits_text: str = '') -> str:
                     
                     try:
                         # 尝试解析 changes_text
-                        logger.info(f"Attempting to parse changes_text for agent {agent}")
                         if isinstance(changes_text, str):
                             # 如果是字符串，尝试先解析为 Python 对象
                             try:
@@ -577,55 +569,40 @@ def review_code(changes_text: str, commits_text: str = '') -> str:
                                 # 如果失败，尝试作为 JSON 解析
                                 changes = json.loads(changes_text)
                         else:
-                            logger.info("Changes text is not string, using as is")
                             changes = changes_text
-                            
-                        logger.info(f"Parsed changes type: {type(changes)}")
-                        logger.info(f"Parsed changes content: {changes}")
                             
                         # 从 changes 中获取文件路径
                         for change in changes:
                             if isinstance(change, dict):
-                                logger.info(f"Processing change: {change}")
                                 if 'new_path' in change:
                                     file_paths.append(change['new_path'])
-                                    logger.info(f"Added new_path: {change['new_path']}")
                                 if 'old_path' in change:
                                     file_paths.append(change['old_path'])
-                                    logger.info(f"Added old_path: {change['old_path']}")
                     except Exception as e:
                         logger.error(f"Error parsing changes data: {str(e)}")
-                        logger.error(f"Changes text that caused error: {changes_text}")
                         # 如果解析失败，尝试从 changes_text 中获取文件路径
                         if isinstance(changes_text, list):
-                            logger.info("Changes text is list, processing directly")
                             for change in changes_text:
                                 if isinstance(change, dict):
                                     if 'new_path' in change:
                                         file_paths.append(change['new_path'])
-                                        logger.info(f"Added new_path from list: {change['new_path']}")
                                     if 'old_path' in change:
                                         file_paths.append(change['old_path'])
-                                        logger.info(f"Added old_path from list: {change['old_path']}")
                     
                     # 去重
                     file_paths = list(set(file_paths))
-                    logger.info(f"Final file paths for agent {agent}: {file_paths}")
                     
                     # 检查是否有任何文件匹配支持的文件类型
                     has_supported_files = False
                     for file_path in file_paths:
-                        logger.info(f"Checking file path: {file_path}")
                         for ext in supported_extensions:
                             if file_path.lower().endswith(ext.lower()):
                                 has_supported_files = True
-                                logger.info(f"Found supported extension {ext} in file {file_path}")
                                 break
                         if has_supported_files:
                             break
                     
                     if not has_supported_files:
-                        logger.info(f"Agent {agent} skipped: No supported file types found. File paths: {file_paths}, Supported extensions: {supported_extensions}")
                         continue
                     
                 review_result = CodeReviewer().review_code(
@@ -649,6 +626,7 @@ def review_code(changes_text: str, commits_text: str = '') -> str:
     if not all_reviews:
         return "代码评审失败，请检查配置和日志"
         
+    logger.info("LLM Response: %s", "\n\n".join(all_reviews))
     return "\n\n".join(all_reviews)
 
 
@@ -946,7 +924,6 @@ def reload_env():
         # 更新Flask secret key
         api_app.secret_key = os.getenv('FLASK_SECRET_KEY', 'ai123456789!!!')
         
-        logger.info("Successfully reloaded .env file")
         return True
     except Exception as e:
         logger.error(f"Failed to reload .env file: {str(e)}")
@@ -1001,19 +978,23 @@ def chat():
                     
                 messages.append({"role": "user", "content": formatted_message})
                 
-                # 调用 LLM 客户端获取响应
-                response = client.stream_completions(messages=messages)
-                
-                # 流式返回响应
-                for chunk in response:
+                # 直接流式返回 LLM 的响应
+                for chunk in client.stream_completions(messages=messages):
                     yield f"data: {json.dumps({'content': chunk})}\n\n"
-                    time.sleep(0.05)  # 控制打字速度
-                    
+                        
             except Exception as e:
                 logger.error(f"LLM API error: {str(e)}")
                 yield f"data: {json.dumps({'content': '抱歉，AI 服务出现错误，请稍后重试。'})}\n\n"
                 
-        return Response(generate(), mimetype='text/event-stream')
+        # 设置 SSE 所需的响应头
+        headers = {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'  # 禁用 Nginx 缓冲
+        }
+        
+        return Response(generate(), mimetype='text/event-stream', headers=headers)
         
     except Exception as e:
         logger.error(f"Chat API error: {str(e)}")

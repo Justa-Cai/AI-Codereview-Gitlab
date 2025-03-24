@@ -60,12 +60,21 @@ class OpenAIClient(BaseClient):
     def stream_completions(self,
                            messages: List[Dict[str, str]],
                            model: Optional[str] | NotGiven = NOT_GIVEN,
+                           temperature: float = 0.7,
+                           max_tokens: Optional[int] = None,
                            ) -> str:
         model = model or self.default_model
-        response = self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            stream=True
-        )
-        for chunk in response:
-            yield chunk.choices[0].delta.content
+        try:
+            response = self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=True,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+            for chunk in response:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception as e:
+            logger.error(f"OpenAI API error: {str(e)}")
+            yield "抱歉，AI 服务出现错误，请稍后重试。"

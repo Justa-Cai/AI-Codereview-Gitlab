@@ -68,7 +68,6 @@ class BaseReviewer(abc.ABC):
                             "content": user_prompt
                         }
                     }
-                    logger.info(f"Successfully loaded agent {agent_name}")
             except Exception as e:
                 logger.error(f"Error loading agent {agent_name}: {str(e)}")
                 continue
@@ -159,4 +158,25 @@ class BaseReviewer(abc.ABC):
             return 0
         match = re.search(r"总分[:：]\s*(\d+)分?", review_text)
         return int(match.group(1)) if match else 0
+
+
+class CodeReviewer(BaseReviewer):
+    """代码审查实现类"""
+    
+    def __init__(self):
+        super().__init__("code_review")
+        
+    def call_llm(self, messages: List[Dict[str, str]]) -> str:
+        """调用 LLM 进行代码审查"""
+        try:
+            response = self.client.completions(
+                messages=messages,
+                model=os.getenv('OPENAI_API_MODEL', 'gpt-3.5-turbo')
+            )
+            # 记录 LLM 返回结果
+            logger.info("LLM Response: %s", response)
+            return response
+        except Exception as e:
+            logger.error(f"Error calling LLM: {str(e)}")
+            return f"Error calling LLM: {str(e)}"
 
