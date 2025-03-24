@@ -958,7 +958,14 @@ def chat():
         message = data['message']
         system_message = data.get('system_message', '')
         user_message = data.get('user_message', '')
-        use_context = data.get('use_context', False)  # 获取上下文开关参数，默认不启用
+        use_context = data.get('use_context', False)
+        temperature = float(data.get('temperature', 0.7))
+        max_tokens = data.get('max_tokens')
+        
+        # 添加调试日志
+        logger.info("Chat API - Original request message: %s", message)
+        logger.info("Chat API - System message: %s", system_message)
+        logger.info("Chat API - User message template: %s", user_message)
         
         def generate():
             try:
@@ -978,9 +985,24 @@ def chat():
                     
                 messages.append({"role": "user", "content": formatted_message})
                 
+                # 添加调试日志
+                logger.info("Chat API - Final formatted message: %s", formatted_message)
+                logger.info("Chat API - Full messages to LLM: %s", json.dumps(messages, ensure_ascii=False))
+                
                 # 直接流式返回 LLM 的响应
-                for chunk in client.stream_completions(messages=messages):
+                accumulated_response = ""
+                for chunk in client.stream_completions(
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                ):
+                    accumulated_response += chunk
+                    # 记录每个块的内容
+                    logger.debug("Chat API - Received chunk: %s", chunk)
                     yield f"data: {json.dumps({'content': chunk})}\n\n"
+                
+                # 记录完整的响应内容
+                logger.info("Chat API - Complete response content: %s", accumulated_response)
                         
             except Exception as e:
                 logger.error(f"LLM API error: {str(e)}")

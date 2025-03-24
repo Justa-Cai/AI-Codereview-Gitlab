@@ -24,7 +24,7 @@
         <div class="message-content">
           <div v-if="message.role === 'assistant'" class="avatar">🤖</div>
           <div v-else class="avatar">👤</div>
-          <div class="text">{{ message.content }}</div>
+          <div class="text" v-html="renderMarkdown(message.content)"></div>
         </div>
       </div>
     </div>
@@ -83,6 +83,21 @@
 
 <script>
 import { ElMessage } from 'element-plus'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
+
+// 配置marked选项
+marked.setOptions({
+  breaks: true,           // 启用换行支持
+  gfm: true,             // 启用GitHub风格的markdown
+  headerIds: false,       // 禁用标题ID
+  mangle: false,         // 禁用标题ID转义
+  sanitize: false,       // 允许HTML标签
+  smartLists: true,      // 使用更智能的列表行为
+  langPrefix: 'language-',// 设置代码块的语言前缀
+  pedantic: false,       // 尽可能地兼容 markdown.pl
+  smartypants: false,    // 使用更智能的标点符号
+})
 
 export default {
   name: 'ChatComponent',
@@ -203,6 +218,41 @@ export default {
     },
     saveChatHistory() {
       localStorage.setItem('chat_history', JSON.stringify(this.messages))
+    },
+    renderMarkdown(content) {
+      try {
+        if (!content) return ''
+        
+        // 如果内容已经是markdown代码块，去掉外层的```markdown标记
+        let processedContent = content
+        if (content.startsWith('```markdown\n') && content.endsWith('```')) {
+          processedContent = content.slice(11, -3)
+        }
+        
+        // 预处理内容
+        processedContent = processedContent
+          // 确保代码块前后有空行，但不处理已经有空行的情况
+          .replace(/([^\n])(```[^\n]*\n)/g, '$1\n$2')
+          .replace(/(\n```[^\n]*)\n?([^\n])/g, '$1\n\n$2')
+          // 确保标题前后有空行，但不处理已经有空行的情况
+          .replace(/([^\n])(#{1,6}\s[^\n]*)/g, '$1\n\n$2')
+          .replace(/(#{1,6}\s[^\n]*\n)([^\n])/g, '$1\n$2')
+          // 确保列表项前有空行，但不处理已经有空行的情况
+          .replace(/([^\n])(\n[*-]\s)/g, '$1\n$2')
+        
+        // 使用marked渲染markdown
+        const rendered = marked(processedContent)
+        
+        // 记录渲染结果用于调试
+        console.log('Original content:', content)
+        console.log('Processed content:', processedContent)
+        console.log('Rendered content:', rendered)
+        
+        return rendered
+      } catch (e) {
+        console.error('Markdown rendering error:', e)
+        return content || ''
+      }
     }
   },
   mounted() {
@@ -352,11 +402,107 @@ export default {
   border-radius: 12px;
   background-color: #f0f0f0;
   word-wrap: break-word;
+  line-height: 1.5;
+}
+
+.text :deep(p) {
+  margin: 8px 0;
+  white-space: pre-wrap;
+}
+
+.text :deep(h1),
+.text :deep(h2),
+.text :deep(h3),
+.text :deep(h4),
+.text :deep(h5),
+.text :deep(h6) {
+  margin: 16px 0 8px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.text :deep(pre) {
+  background-color: #282c34;
+  padding: 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 16px 0;
+  position: relative;
+}
+
+.text :deep(pre code) {
+  background-color: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #abb2bf;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  display: block;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.text :deep(code) {
+  background-color: rgba(0, 0, 0, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  font-size: 0.9em;
+  color: inherit;
+}
+
+.text :deep(ul),
+.text :deep(ol) {
+  margin: 16px 0;
+  padding-left: 2em;
+}
+
+.text :deep(li) {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+
+.text :deep(blockquote) {
+  margin: 16px 0;
+  padding: 0 16px;
+  color: #666;
+  border-left: 4px solid #ddd;
+  background-color: rgba(0, 0, 0, 0.05);
+  border-radius: 0 4px 4px 0;
+}
+
+.text :deep(blockquote p) {
+  margin: 8px 0;
+}
+
+.text :deep(hr) {
+  margin: 24px 0;
+  border: none;
+  border-top: 1px solid #ddd;
 }
 
 .user-message .text {
   background-color: #4CAF50;
   color: white;
+}
+
+.user-message .text :deep(pre) {
+  background-color: rgba(0, 0, 0, 0.3);
+}
+
+.user-message .text :deep(pre code) {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.user-message .text :deep(code) {
+  background-color: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.user-message .text :deep(blockquote) {
+  border-left-color: rgba(255, 255, 255, 0.5);
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .input-container {
