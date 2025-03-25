@@ -4,15 +4,23 @@ FROM node:18-slim AS frontend-builder
 # 设置工作目录
 WORKDIR /app/frontend
 
-# 配置yarn使用淘宝镜像源
-ENV YARN_REGISTRY=https://registry.npmmirror.com
+# 配置是否使用国内镜像源
+ARG USE_CHINA_MIRROR=false
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ARG YARN_REGISTRY=https://registry.yarnpkg.com
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
+ENV YARN_REGISTRY=${YARN_REGISTRY}
 ENV NODE_OPTIONS=--max_old_space_size=4096
 
-# 复制 package.json
+# 创建缓存目录
+RUN mkdir -p /root/.yarn-cache
+
+# 首先只复制 package.json 和 yarn.lock
 COPY ui/package*.json ./
+COPY ui/yarn.lock* ./
 
 # 安装依赖并生成 yarn.lock
-RUN yarn install --registry=https://registry.npmmirror.com
+RUN yarn install --frozen-lockfile --cache-folder /root/.yarn-cache --registry=${YARN_REGISTRY}
 
 # 复制源代码
 COPY ui/ .
@@ -21,20 +29,54 @@ COPY ui/ .
 RUN yarn build
 
 # 后端基础镜像
+FROM python:3.10-slim AS backend-builder
+
+# 设置工作目录
+WORKDIR /app/
+
+# 设置pip使用国内镜像源
+ARG USE_CHINA_MIRROR=false
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
+# 创建pip缓存目录
+RUN mkdir -p /root/.cache/pip
+
+# 配置pip镜像源
+RUN pip config set global.index-url ${PIP_INDEX_URL}
+
+# 首先只复制依赖文件
+COPY requirements.txt .
+
+# 安装依赖到临时目录
+RUN pip install --no-cache-dir -r requirements.txt --target /install \
+    --timeout 1000 \
+    --retries 3 \
+    --default-timeout 1000 \
+    --no-deps \
+    --verbose \
+    && pip install --no-cache-dir -r requirements.txt --target /install \
+    --timeout 1000 \
+    --retries 3 \
+    --default-timeout 1000 \
+    --verbose
+
+# 最终镜像
 FROM python:3.10-slim
 
 # 设置工作目录
 WORKDIR /app/
 
 # 设置pip使用国内镜像源
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG USE_CHINA_MIRROR=false
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
+# 配置pip镜像源
 RUN pip config set global.index-url ${PIP_INDEX_URL}
 
 # 安装 supervisor
 RUN pip install supervisor
 
 # 复制后端代码和依赖文件
-COPY requirements.txt .
 COPY biz ./biz
 COPY api.py ./api.py
 COPY ui.py ./ui.py
@@ -43,8 +85,8 @@ COPY conf/prompt_templates.yml ./conf/prompt_templates.yml
 COPY conf/agents ./conf/
 COPY conf/supervisord.app.conf /etc/supervisor/supervisord.conf
 
-# 安装依赖
-RUN pip install --no-cache-dir -r requirements.txt
+# 从构建阶段复制已安装的依赖
+COPY --from=backend-builder /install /usr/local/lib/python3.10/site-packages/
 
 # 创建必要的目录
 RUN mkdir -p /app/static /app/log /app/data
