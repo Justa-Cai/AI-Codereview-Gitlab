@@ -29,6 +29,7 @@
 
       <div class="button-container">
         <el-button type="primary" @click="handleAdd">添加配置项</el-button>
+        <el-button v-if="deletedItems.length > 0" type="warning" @click="handleUndoDelete">撤销删除</el-button>
         <el-button type="success" @click="handleSave">保存配置</el-button>
       </div>
     </el-card>
@@ -45,7 +46,9 @@ export default {
   data() {
     return {
       configList: [],
-      isAuthenticated: false
+      isAuthenticated: false,
+      pendingDeletes: [],
+      deletedItems: []
     }
   },
   created() {
@@ -86,41 +89,49 @@ export default {
         value: ''
       })
     },
-    async handleDelete(index) {
-      try {
-        const keyToDelete = this.configList[index].key
-        if (!keyToDelete) {
-          ElMessage.warning('无法删除空的配置项')
-          return
-        }
-
-        // 调用删除API
-        const response = await axios.post('/api/delete-config', { key: keyToDelete })
-        
-        // 使用返回的数据更新前端状态
-        const { config, order } = response.data
-        this.configList = order.map(key => ({
-          key: key || '',
-          value: config[key] || ''
-        }))
-        
-        ElMessage({
-          message: '配置项删除成功！',
-          type: 'success',
-          duration: 3000,
-          showClose: true
-        })
-      } catch (error) {
-        console.error('Error deleting config item:', error)
-        if (error.response && error.response.status === 404) {
-          ElMessage.error('配置项不存在')
-        } else {
-          ElMessage.error('删除配置项失败')
-        }
+    handleDelete(index) {
+      const keyToDelete = this.configList[index].key
+      if (!keyToDelete) {
+        ElMessage.warning('无法删除空的配置项')
+        return
       }
+      this.pendingDeletes.push(keyToDelete)
+      this.deletedItems.push({
+        key: keyToDelete,
+        value: this.configList[index].value,
+        index: index
+      })
+      this.configList.splice(index, 1)
+    },
+    handleUndoDelete() {
+      if (this.deletedItems.length === 0) return
+      
+      const lastDeleted = this.deletedItems.pop()
+      this.pendingDeletes = this.pendingDeletes.filter(key => key !== lastDeleted.key)
+      
+      this.configList.splice(lastDeleted.index, 0, {
+        key: lastDeleted.key,
+        value: lastDeleted.value
+      })
     },
     async handleSave() {
       try {
+        for (const key of this.pendingDeletes) {
+          try {
+            await axios.post('/api/delete-config', { key: key })
+          } catch (error) {
+            console.error(`Error deleting config item ${key}:`, error)
+            if (error.response && error.response.status === 404) {
+              ElMessage.error(`配置项 ${key} 不存在`)
+            } else {
+              ElMessage.error(`删除配置项 ${key} 失败`)
+            }
+            return
+          }
+        }
+        
+        this.pendingDeletes = []
+        
         const config = this.configList.reduce((acc, curr) => {
           if (curr.key && curr.value) {
             acc[curr.key] = curr.value
@@ -128,7 +139,11 @@ export default {
           return acc
         }, {})
         
-        await axios.post('/api/save-config', config)
+        console.log('准备保存的配置数据:', config)
+        
+        const response = await axios.post('/api/save-config', config)
+        console.log('保存配置的响应:', response.data)
+        
         ElMessage({
           message: '配置保存成功！配置项已更新，请重新加载配置以使更改生效。',
           type: 'success',
@@ -137,6 +152,10 @@ export default {
         })
         await this.fetchConfig()
       } catch (error) {
+        console.error('保存配置失败，详细错误:', error)
+        if (error.response) {
+          console.error('错误响应数据:', error.response.data)
+        }
         if (error.response && error.response.status === 401) {
           this.$emit('login-required')
         } else {
@@ -146,7 +165,6 @@ export default {
             duration: 5000,
             showClose: true
           })
-          console.error('保存配置失败:', error)
         }
       }
     },

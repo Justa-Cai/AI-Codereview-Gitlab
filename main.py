@@ -744,60 +744,135 @@ def save_config():
     保存配置的API端点
     """
     if not session.get('authenticated'):
+        logger.error("未授权访问尝试保存配置")
         return jsonify({'message': '未授权访问'}), 401
         
     try:
         config = request.get_json()
         if not config:
+            logger.error("收到空的配置数据")
             return jsonify({'message': '无效的配置数据'}), 400
             
         # 读取当前.env文件内容
         env_path = find_dotenv("conf/.env")
+        
+        if not os.path.exists(env_path):
+            logger.error(f"配置文件不存在: {env_path}")
+            return jsonify({'message': '配置文件不存在'}), 500
+            
+        # 检查文件权限
+        if not os.access(env_path, os.W_OK):
+            logger.error(f"配置文件没有写入权限: {env_path}")
+            return jsonify({'message': '配置文件没有写入权限'}), 500
+            
+        # 检查目录权限
+        env_dir = os.path.dirname(env_path)
+        if not os.access(env_dir, os.W_OK):
+            logger.error(f"配置目录没有写入权限: {env_dir}")
+            return jsonify({'message': '配置目录没有写入权限'}), 500
+            
         lines = []
         config_dict = {}
+        config_order = []  # 用于保存配置项的顺序
         
         # 读取并解析现有配置
-        with open(env_path, 'r', encoding='utf-8', newline='') as f:
-            for line in f:
-                # 保留原始行，包括注释和空行，保持原有换行符
-                lines.append(line)
-                # 如果是配置项，解析键值对
-                if line.strip() and not line.startswith('#'):
-                    key, value = line.split('=', 1)
-                    config_dict[key.strip()] = value.strip()
+        try:
+            with open(env_path, 'r', encoding='utf-8', newline='') as f:
+                for line in f:
+                    lines.append(line)
+                    if line.strip() and not line.startswith('#'):
+                        try:
+                            key, value = line.split('=', 1)
+                            key = key.strip()
+                            value = value.strip()
+                            # 移除可能的引号
+                            if value.startswith('"') and value.endswith('"'):
+                                value = value[1:-1]
+                            elif value.startswith("'") and value.endswith("'"):
+                                value = value[1:-1]
+                            config_dict[key] = value
+                            if key not in config_order:
+                                config_order.append(key)
+                        except ValueError as e:
+                            logger.warning(f"跳过无效的配置行: {line.strip()}, 错误: {str(e)}")
+        except Exception as e:
+            logger.error(f"读取配置文件失败: {str(e)}")
+            return jsonify({'message': '读取配置文件失败'}), 500
         
         # 更新配置
-        config_dict.update(config)
+        for key, value in config.items():
+            if key not in config_order:
+                config_order.append(key)
+            config_dict[key] = str(value).strip()
         
         # 构建新的配置文件内容
         new_content = []
+        processed_keys = set()  # 用于跟踪已处理的键
+        
+        # 首先处理现有行
         for line in lines:
             if line.strip() and not line.startswith('#'):
-                # 如果是配置项，替换为新值
                 key = line.split('=', 1)[0].strip()
                 if key in config_dict:
-                    new_content.append(f"{key}={config_dict[key]}\n")
+                    value = config_dict[key]
+                    # 如果值包含特殊字符，使用双引号包裹
+                    if any(c in value for c in [' ', '"', "'", '\\', '#']):
+                        new_content.append(f'{key}="{value}"\n')
+                    else:
+                        new_content.append(f'{key}={value}\n')
+                    processed_keys.add(key)
                 else:
-                    # 删除不存在的配置项
                     continue
             else:
-                # 保留注释和空行
                 new_content.append(line)
         
-        # 写入新的配置文件，保持原有换行符
-        with open(env_path, 'w', encoding='utf-8', newline='') as f:
-            f.writelines(new_content)
+        # 添加新的配置项
+        for key in config_order:
+            if key not in processed_keys and key in config_dict:
+                value = config_dict[key]
+                if any(c in value for c in [' ', '"', "'", '\\', '#']):
+                    new_content.append(f'{key}="{value}"\n')
+                else:
+                    new_content.append(f'{key}={value}\n')
+        
+        # 写入新的配置文件
+        try:
+            # 先备份原文件
+            backup_path = f"{env_path}.bak"
+            try:
+                import shutil
+                shutil.copy2(env_path, backup_path)
+            except Exception as backup_error:
+                logger.error(f"创建配置文件备份失败: {str(backup_error)}")
+            
+            # 写入新配置
+            with open(env_path, 'w', encoding='utf-8', newline='') as f:
+                f.writelines(new_content)
                 
-        logger.info("Successfully saved config")
+        except Exception as e:
+            logger.error(f"写入配置文件失败: {str(e)}")
+            # 如果写入失败，尝试恢复备份
+            if os.path.exists(backup_path):
+                try:
+                    shutil.copy2(backup_path, env_path)
+                except Exception as restore_error:
+                    logger.error(f"恢复配置文件备份失败: {str(restore_error)}")
+            return jsonify({'message': '写入配置文件失败'}), 500
         
         # 重新加载配置
         if reload_env():
-            return jsonify({'message': '配置保存并重新加载成功'})
+            return jsonify({
+                'message': '配置保存并重新加载成功',
+                'config': config_dict,
+                'order': config_order
+            })
         else:
+            logger.error("配置重新加载失败")
             return jsonify({'message': '配置保存成功但重新加载失败'}), 500
             
     except Exception as e:
         logger.error(f"Failed to save config: {str(e)}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         return jsonify({'message': '保存配置失败'}), 500
 
 @api_app.route('/api/delete-config', methods=['POST'])
@@ -824,20 +899,17 @@ def delete_config():
         # 读取并解析现有配置
         with open(env_path, 'r', encoding='utf-8', newline='') as f:
             for line in f:
-                # 保留原始行，包括注释和空行，保持原有换行符
                 lines.append(line)
-                # 如果是配置项，解析键值对
                 if line.strip() and not line.startswith('#'):
                     key, value = line.split('=', 1)
                     key = key.strip()
                     value = value.strip()
                     config_dict[key] = value
-                    config_order.append(key)  # 保存配置项的顺序
+                    config_order.append(key)
         
         # 删除指定的配置项
         if key_to_delete in config_dict:
             del config_dict[key_to_delete]
-            # 从order数组中移除该key
             if key_to_delete in config_order:
                 config_order.remove(key_to_delete)
         else:
@@ -847,22 +919,17 @@ def delete_config():
         new_content = []
         for line in lines:
             if line.strip() and not line.startswith('#'):
-                # 如果是配置项，替换为新值
                 key = line.split('=', 1)[0].strip()
                 if key in config_dict:
                     new_content.append(f"{key}={config_dict[key]}\n")
                 else:
-                    # 删除不存在的配置项
                     continue
             else:
-                # 保留注释和空行
                 new_content.append(line)
         
-        # 写入新的配置文件，保持原有换行符
+        # 写入新的配置文件
         with open(env_path, 'w', encoding='utf-8', newline='') as f:
             f.writelines(new_content)
-                
-        logger.info(f"Successfully deleted config key: {key_to_delete}")
         
         # 重新加载配置
         if reload_env():
@@ -872,6 +939,7 @@ def delete_config():
                 'order': config_order
             })
         else:
+            logger.error("配置重新加载失败")
             return jsonify({'message': '配置删除成功但重新加载失败'}), 500
             
     except Exception as e:
