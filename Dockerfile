@@ -61,7 +61,7 @@ RUN pip install --no-cache-dir -r requirements.txt --target /install \
     --verbose
 
 # 最终镜像
-FROM python:3.10-slim
+FROM python:3.10-slim AS app
 
 # 设置工作目录
 WORKDIR /app/
