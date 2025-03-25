@@ -60,6 +60,14 @@
           </option>
         </select>
       </div>
+      <div class="filter-group">
+        <label>每页显示：</label>
+        <select v-model="pageSize">
+          <option v-for="size in pageSizeOptions" :key="size" :value="size">
+            {{ size }}条
+          </option>
+        </select>
+      </div>
     </div>
 
     <!-- 数据表格 -->
@@ -93,6 +101,27 @@
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- 分页控件 -->
+    <div class="pagination">
+      <button 
+        :disabled="currentPage === 1"
+        @click="changePage(currentPage - 1)"
+        class="page-button"
+      >
+        上一页
+      </button>
+      <span class="page-info">
+        第 {{ currentPage }} 页 / 共 {{ totalPages }} 页
+      </span>
+      <button 
+        :disabled="currentPage === totalPages"
+        @click="changePage(currentPage + 1)"
+        class="page-button"
+      >
+        下一页
+      </button>
     </div>
 
     <!-- 统计信息 -->
@@ -141,7 +170,7 @@ export default {
   },
   data() {
     return {
-      activeTab: 'mr',
+      activeTab: 'push',
       startDate: this.getDefaultStartDate(),
       endDate: new Date().toISOString().split('T')[0],
       selectedAuthors: [],
@@ -156,7 +185,13 @@ export default {
         authorScore: null
       },
       showModal: false,
-      selectedData: null
+      selectedData: null,
+      currentPage: 1,
+      pageSize: 10,
+      pageSizeOptions: [5, 10, 20, 50, 100, 1000],
+      totalCount: 0,
+      isLoading: false,
+      updateChartsTimeout: null
     }
   },
   computed: {
@@ -182,25 +217,17 @@ export default {
           ]
     },
     filteredData() {
-      return this.data.filter(row => {
-        const date = new Date(row.updated_at)
-        const start = new Date(this.startDate)
-        const end = new Date(this.endDate)
-        end.setHours(23, 59, 59, 999)
-        
-        const dateMatch = date >= start && date <= end
-        const authorMatch = this.selectedAuthors.length === 0 || this.selectedAuthors.includes(row.author)
-        const projectMatch = this.selectedProjects.length === 0 || this.selectedProjects.includes(row.project_name)
-        
-        return dateMatch && authorMatch && projectMatch
-      })
+      return this.data
     },
     totalRecords() {
-      return this.filteredData.length
+      return this.totalCount
     },
     averageScore() {
       if (this.filteredData.length === 0) return 0
       return this.filteredData.reduce((sum, row) => sum + row.score, 0) / this.filteredData.length
+    },
+    totalPages() {
+      return Math.ceil(this.totalCount / this.pageSize)
     }
   },
   methods: {
@@ -228,11 +255,16 @@ export default {
       return date.toISOString().split('T')[0]
     },
     async fetchData() {
+      if (this.isLoading) return;
+      
       try {
+        this.isLoading = true;
         const endpoint = this.activeTab === 'mr' ? '/api/mr-logs' : '/api/push-logs'
         const params = new URLSearchParams({
           start_date: this.startDate,
-          end_date: this.endDate
+          end_date: this.endDate,
+          page: this.currentPage,
+          page_size: this.pageSize
         })
         
         if (this.selectedAuthors.length > 0) {
@@ -249,9 +281,9 @@ export default {
         
         const response = await fetch(`${endpoint}?${params.toString()}`)
         if (response.ok) {
-          const rawData = await response.json()
+          const result = await response.json()
           // 处理时间戳和格式化数据
-          this.data = rawData.map(item => ({
+          this.data = result.data.map(item => ({
             ...item,
             updated_at: new Date(item.updated_at * 1000).toLocaleString(),
             score: parseFloat(item.score) || 0,
@@ -261,63 +293,131 @@ export default {
             target_branch: item.target_branch || '',
             url: item.url || ''
           }))
+          this.totalCount = result.total
           this.updateUniqueValues()
-          this.updateCharts()
+          // 使用防抖处理更新图表
+          if (this.updateChartsTimeout) {
+            clearTimeout(this.updateChartsTimeout)
+          }
+          this.updateChartsTimeout = setTimeout(() => {
+            this.updateCharts()
+          }, 300)
         } else {
           console.error('获取数据失败:', await response.text())
         }
       } catch (error) {
         console.error('获取数据失败:', error)
+      } finally {
+        this.isLoading = false
       }
     },
     updateUniqueValues() {
       this.uniqueAuthors = [...new Set(this.data.map(row => row.author))]
       this.uniqueProjects = [...new Set(this.data.map(row => row.project_name))]
     },
-    updateCharts() {
-      // 项目提交次数图表
-      const projectCounts = this.getProjectCounts()
-      this.updateChart('projectCount', '项目提交次数', projectCounts)
-
-      // 项目平均分数图表
-      const projectScores = this.getProjectScores()
-      this.updateChart('projectScore', '项目平均分数', projectScores)
-
-      // 人员提交次数图表
-      const authorCounts = this.getAuthorCounts()
-      this.updateChart('authorCount', '人员提交次数', authorCounts)
-
-      // 人员平均分数图表
-      const authorScores = this.getAuthorScores()
-      this.updateChart('authorScore', '人员平均分数', authorScores)
-    },
-    updateChart(chartKey, label, data) {
-      if (this.charts[chartKey]) {
-        this.charts[chartKey].destroy()
+    getLabels(chartKey) {
+      switch (chartKey) {
+        case 'projectCount':
+        case 'projectScore':
+          return this.getProjectCounts().labels;
+        case 'authorCount':
+        case 'authorScore':
+          return this.getAuthorCounts().labels;
+        default:
+          return [];
       }
-
-      const ctx = this.$refs[`${chartKey}Chart`].getContext('2d')
-      this.charts[chartKey] = new Chart(ctx, {
-        type: 'bar',
-        data: {
-          labels: data.labels,
-          datasets: [{
-            label: label,
-            data: data.values,
-            backgroundColor: this.generateColors(data.labels.length, label)
-          }]
-        },
-        options: {
-          responsive: true,
-          scales: {
-            y: {
-              beginAtZero: true
-            }
-          }
-        }
-      })
     },
-    generateColors(count, label) {
+    getData(chartKey) {
+      switch (chartKey) {
+        case 'projectCount':
+          return this.getProjectCounts().values;
+        case 'projectScore':
+          return this.getProjectScores().values;
+        case 'authorCount':
+          return this.getAuthorCounts().values;
+        case 'authorScore':
+          return this.getAuthorScores().values;
+        default:
+          return [];
+      }
+    },
+    updateCharts() {
+      if (!this.$refs) return;
+      
+      this.$nextTick(() => {
+        const chartTypes = ['projectCount', 'projectScore', 'authorCount', 'authorScore'];
+        
+        chartTypes.forEach(chartKey => {
+          const canvas = this.$refs[`${chartKey}Chart`];
+          if (!canvas) {
+            console.error(`无法获取 ${chartKey} 的 canvas 元素`);
+            return;
+          }
+
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            console.error(`无法获取 ${chartKey} 的 canvas 上下文`);
+            return;
+          }
+
+          // 如果已存在图表实例，先销毁
+          if (this.charts[chartKey]) {
+            try {
+              this.charts[chartKey].destroy();
+            } catch (error) {
+              console.error(`销毁 ${chartKey} 图表时出错:`, error);
+            }
+            this.charts[chartKey] = null;
+          }
+
+          try {
+            const labels = this.getLabels(chartKey);
+            const data = this.getData(chartKey);
+            
+            this.charts[chartKey] = new Chart(ctx, {
+              type: 'bar',
+              data: {
+                labels: labels,
+                datasets: [{
+                  label: this.getChartLabel(chartKey),
+                  data: data,
+                  backgroundColor: this.generateColors(labels.length, chartKey)
+                }]
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  y: {
+                    beginAtZero: true
+                  }
+                },
+                plugins: {
+                  legend: {
+                    display: false
+                  }
+                },
+                animation: {
+                  duration: 300 // 减少动画时间
+                }
+              }
+            });
+          } catch (error) {
+            console.error(`创建 ${chartKey} 图表时出错:`, error);
+          }
+        });
+      });
+    },
+    getChartLabel(chartKey) {
+      const labels = {
+        projectCount: '项目提交次数',
+        projectScore: '项目平均分数',
+        authorCount: '人员提交次数',
+        authorScore: '人员平均分数'
+      };
+      return labels[chartKey] || chartKey;
+    },
+    generateColors(count, chartKey) {
       // 为不同类型的图表设置不同的颜色方案
       const colorSchemes = {
         projectCount: [
@@ -338,26 +438,20 @@ export default {
         ]
       }
 
-      // 获取当前图表的类型
-      const chartType = Object.keys(this.charts).find(key => 
-        this.charts[key] && this.charts[key].data.datasets[0].label === label
+      // 使用图表键直接获取颜色方案
+      const colors = colorSchemes[chartKey] || Array(count).fill().map((_, i) => 
+        `hsl(${(i * 360) / count}, 70%, 50%)`
       )
 
-      // 如果找不到对应的图表类型，使用默认颜色方案
-      if (!chartType || !colorSchemes[chartType]) {
-        return Array(count).fill().map((_, i) => 
-          `hsl(${(i * 360) / count}, 70%, 50%)`
-        )
-      }
-
       // 如果数据点数量超过预定义的颜色数量，循环使用颜色
-      const colors = colorSchemes[chartType]
       return Array(count).fill().map((_, i) => colors[i % colors.length])
     },
     getProjectCounts() {
       const counts = {}
-      this.filteredData.forEach(row => {
-        counts[row.project_name] = (counts[row.project_name] || 0) + 1
+      this.data.forEach(row => {
+        if (row.project_name) {
+          counts[row.project_name] = (counts[row.project_name] || 0) + 1
+        }
       })
       return {
         labels: Object.keys(counts),
@@ -367,9 +461,11 @@ export default {
     getProjectScores() {
       const scores = {}
       const counts = {}
-      this.filteredData.forEach(row => {
-        scores[row.project_name] = (scores[row.project_name] || 0) + row.score
-        counts[row.project_name] = (counts[row.project_name] || 0) + 1
+      this.data.forEach(row => {
+        if (row.project_name && row.score) {
+          scores[row.project_name] = (scores[row.project_name] || 0) + parseFloat(row.score)
+          counts[row.project_name] = (counts[row.project_name] || 0) + 1
+        }
       })
       return {
         labels: Object.keys(scores),
@@ -378,8 +474,10 @@ export default {
     },
     getAuthorCounts() {
       const counts = {}
-      this.filteredData.forEach(row => {
-        counts[row.author] = (counts[row.author] || 0) + 1
+      this.data.forEach(row => {
+        if (row.author) {
+          counts[row.author] = (counts[row.author] || 0) + 1
+        }
       })
       return {
         labels: Object.keys(counts),
@@ -389,9 +487,11 @@ export default {
     getAuthorScores() {
       const scores = {}
       const counts = {}
-      this.filteredData.forEach(row => {
-        scores[row.author] = (scores[row.author] || 0) + row.score
-        counts[row.author] = (counts[row.author] || 0) + 1
+      this.data.forEach(row => {
+        if (row.author && row.score) {
+          scores[row.author] = (scores[row.author] || 0) + parseFloat(row.score)
+          counts[row.author] = (counts[row.author] || 0) + 1
+        }
       })
       return {
         labels: Object.keys(scores),
@@ -405,27 +505,59 @@ export default {
     closeModal() {
       this.showModal = false
       this.selectedData = null
+    },
+    changePage(page) {
+      if (this.isLoading) return;
+      this.currentPage = page;
+      this.fetchData();
     }
   },
   watch: {
     activeTab() {
+      this.currentPage = 1
       this.fetchData()
     },
     startDate() {
-      this.updateCharts()
+      this.currentPage = 1
+      this.fetchData()
     },
     endDate() {
-      this.updateCharts()
+      this.currentPage = 1
+      this.fetchData()
     },
     selectedAuthors() {
-      this.updateCharts()
+      this.currentPage = 1
+      this.fetchData()
     },
     selectedProjects() {
-      this.updateCharts()
+      this.currentPage = 1
+      this.fetchData()
+    },
+    pageSize() {
+      this.currentPage = 1
+      this.fetchData()
     }
   },
   mounted() {
-    this.fetchData()
+    this.fetchData();
+  },
+  beforeUnmount() {
+    // 清理所有图表实例
+    Object.keys(this.charts).forEach(chartKey => {
+      if (this.charts[chartKey]) {
+        try {
+          this.charts[chartKey].destroy();
+        } catch (error) {
+          console.error(`销毁 ${chartKey} 图表时出错:`, error);
+        }
+        this.charts[chartKey] = null;
+      }
+    });
+    
+    // 清理防抖定时器
+    if (this.updateChartsTimeout) {
+      clearTimeout(this.updateChartsTimeout);
+    }
   }
 }
 </script>
@@ -602,12 +734,23 @@ th {
   padding: 20px;
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  height: 300px; /* 固定高度 */
+  display: flex;
+  flex-direction: column;
 }
 
 .chart-container h3 {
-  margin-top: 0;
+  margin: 0 0 15px 0;
   text-align: center;
+  font-size: 16px;
 }
+
+.chart-container canvas {
+  flex: 1;
+  width: 100% !important;
+  height: 100% !important;
+}
+
 .prompt-button {
   display: flex;
   align-items: center;
@@ -624,5 +767,38 @@ th {
 
 .prompt-button:hover {
   background-color: #45a049;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 20px;
+  margin: 20px 0;
+}
+
+.page-button {
+  padding: 8px 16px;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.3s;
+}
+
+.page-button:hover:not(:disabled) {
+  background-color: #45a049;
+}
+
+.page-button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+
+.page-info {
+  font-size: 14px;
+  color: #666;
 }
 </style>

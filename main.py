@@ -637,6 +637,8 @@ def get_push_data():
     end_date = request.args.get('end_date', datetime.now().strftime('%Y-%m-%d'))
     authors = request.args.getlist('authors[]')
     projects = request.args.getlist('projects[]')
+    page = int(request.args.get('page', 1))
+    page_size = int(request.args.get('page_size', 10))
     
     try:
         # 转换时间戳
@@ -645,6 +647,16 @@ def get_push_data():
 
         # 查询 Push 数据
         push_df = ReviewService().get_push_review_logs(
+            authors=authors if authors else None,
+            project_names=projects if projects else None,
+            updated_at_gte=start_ts,
+            updated_at_lte=end_ts,
+            page=page,
+            page_size=page_size
+        )
+
+        # 获取总记录数
+        total_count = ReviewService().get_push_review_logs_count(
             authors=authors if authors else None,
             project_names=projects if projects else None,
             updated_at_gte=start_ts,
@@ -663,7 +675,13 @@ def get_push_data():
             if col not in push_df.columns:
                 push_df[col] = None
 
-        return push_df.to_json(orient='records')
+        return jsonify({
+            'data': push_df.to_dict(orient='records'),
+            'total': total_count,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': (total_count + page_size - 1) // page_size
+        })
     except Exception as e:
         logger.error(f"Error in get_push_data: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -675,6 +693,8 @@ def get_mr_data():
     end_date = request.args.get('end_date', datetime.now().strftime('%Y-%m-%d'))
     authors = request.args.getlist('authors[]')
     projects = request.args.getlist('projects[]')
+    page = int(request.args.get('page', 1))
+    page_size = int(request.args.get('page_size', 10))
     
     try:
         # 转换时间戳
@@ -683,6 +703,16 @@ def get_mr_data():
 
         # 查询 MR 数据
         mr_df = ReviewService().get_mr_review_logs(
+            authors=authors if authors else None,
+            project_names=projects if projects else None,
+            updated_at_gte=start_ts,
+            updated_at_lte=end_ts,
+            page=page,
+            page_size=page_size
+        )
+
+        # 获取总记录数
+        total_count = ReviewService().get_mr_review_logs_count(
             authors=authors if authors else None,
             project_names=projects if projects else None,
             updated_at_gte=start_ts,
@@ -699,7 +729,13 @@ def get_mr_data():
             if col not in mr_df.columns:
                 mr_df[col] = None
 
-        return mr_df.to_json(orient='records')
+        return jsonify({
+            'data': mr_df.to_dict(orient='records'),
+            'total': total_count,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': (total_count + page_size - 1) // page_size
+        })
     except Exception as e:
         logger.error(f"Error in get_mr_data: {str(e)}")
         return jsonify({'error': str(e)}), 500

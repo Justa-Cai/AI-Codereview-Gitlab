@@ -64,7 +64,7 @@ class ReviewService:
 
     @staticmethod
     def get_mr_review_logs(authors: list = None, project_names: list = None, updated_at_gte: int = None,
-                           updated_at_lte: int = None) -> pd.DataFrame:
+                           updated_at_lte: int = None, page: int = 1, page_size: int = 10) -> pd.DataFrame:
         """获取符合条件的合并请求审核日志"""
         try:
             with sqlite3.connect(ReviewService.DB_FILE) as conn:
@@ -92,12 +92,55 @@ class ReviewService:
                 if updated_at_lte is not None:
                     query += " AND updated_at <= ?"
                     params.append(updated_at_lte)
-                query += " ORDER BY updated_at DESC"
+                
+                # 添加分页
+                offset = (page - 1) * page_size
+                query += f" ORDER BY updated_at DESC LIMIT {page_size} OFFSET {offset}"
+                
                 df = pd.read_sql_query(sql=query, con=conn, params=params)
             return df
         except sqlite3.DatabaseError as e:
             print(f"Error retrieving review logs: {e}")
             return pd.DataFrame()
+
+    @staticmethod
+    def get_mr_review_logs_count(authors: list = None, project_names: list = None, updated_at_gte: int = None,
+                                updated_at_lte: int = None) -> int:
+        """获取符合条件的合并请求审核日志总数"""
+        try:
+            with sqlite3.connect(ReviewService.DB_FILE) as conn:
+                query = """
+                            SELECT COUNT(*) as count
+                            FROM mr_review_log
+                            WHERE 1=1
+                            """
+                params = []
+
+                if authors:
+                    placeholders = ','.join(['?'] * len(authors))
+                    query += f" AND author IN ({placeholders})"
+                    params.extend(authors)
+
+                if project_names:
+                    placeholders = ','.join(['?'] * len(project_names))
+                    query += f" AND project_name IN ({placeholders})"
+                    params.extend(project_names)
+
+                if updated_at_gte is not None:
+                    query += " AND updated_at >= ?"
+                    params.append(updated_at_gte)
+
+                if updated_at_lte is not None:
+                    query += " AND updated_at <= ?"
+                    params.append(updated_at_lte)
+                
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                result = cursor.fetchone()
+                return result[0] if result else 0
+        except sqlite3.DatabaseError as e:
+            print(f"Error retrieving review logs count: {e}")
+            return 0
 
     @staticmethod
     def insert_push_review_log(entity: PushReviewEntity):
@@ -118,7 +161,7 @@ class ReviewService:
 
     @staticmethod
     def get_push_review_logs(authors: list = None, project_names: list = None, updated_at_gte: int = None,
-                             updated_at_lte: int = None) -> pd.DataFrame:
+                             updated_at_lte: int = None, page: int = 1, page_size: int = 10) -> pd.DataFrame:
         """获取符合条件的推送审核日志"""
         try:
             with sqlite3.connect(ReviewService.DB_FILE) as conn:
@@ -151,8 +194,9 @@ class ReviewService:
                     query += " AND updated_at <= ?"
                     params.append(updated_at_lte)
 
-                # 按 updated_at 降序排序
-                query += " ORDER BY updated_at DESC"
+                # 按 updated_at 降序排序并添加分页
+                offset = (page - 1) * page_size
+                query += f" ORDER BY updated_at DESC LIMIT {page_size} OFFSET {offset}"
 
                 # 执行查询
                 df = pd.read_sql_query(sql=query, con=conn, params=params)
@@ -161,6 +205,44 @@ class ReviewService:
             print(f"Error retrieving push review logs: {e}")
             return pd.DataFrame()
 
+    @staticmethod
+    def get_push_review_logs_count(authors: list = None, project_names: list = None, updated_at_gte: int = None,
+                                  updated_at_lte: int = None) -> int:
+        """获取符合条件的推送审核日志总数"""
+        try:
+            with sqlite3.connect(ReviewService.DB_FILE) as conn:
+                query = """
+                    SELECT COUNT(*) as count
+                    FROM push_review_log
+                    WHERE 1=1
+                """
+                params = []
+
+                if authors:
+                    placeholders = ','.join(['?'] * len(authors))
+                    query += f" AND author IN ({placeholders})"
+                    params.extend(authors)
+
+                if project_names:
+                    placeholders = ','.join(['?'] * len(project_names))
+                    query += f" AND project_name IN ({placeholders})"
+                    params.extend(project_names)
+
+                if updated_at_gte is not None:
+                    query += " AND updated_at >= ?"
+                    params.append(updated_at_gte)
+
+                if updated_at_lte is not None:
+                    query += " AND updated_at <= ?"
+                    params.append(updated_at_lte)
+                
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                result = cursor.fetchone()
+                return result[0] if result else 0
+        except sqlite3.DatabaseError as e:
+            print(f"Error retrieving push review logs count: {e}")
+            return 0
 
 # Initialize database
 ReviewService.init_db()
