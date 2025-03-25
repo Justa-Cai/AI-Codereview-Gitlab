@@ -60,8 +60,8 @@ RUN pip install --no-cache-dir -r requirements.txt --target /install \
     --default-timeout 1000 \
     --verbose
 
-# 最终镜像
-FROM python:3.10-slim AS app
+# 基础运行时镜像
+FROM python:3.10-slim AS base
 
 # 设置工作目录
 WORKDIR /app/
@@ -73,33 +73,50 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 # 配置pip镜像源
 RUN pip config set global.index-url ${PIP_INDEX_URL}
 
-# 安装 supervisor
-RUN pip install supervisor
+# 从构建阶段复制已安装的依赖
+COPY --from=backend-builder /install /usr/local/lib/python3.10/site-packages/
 
-# 复制后端代码和依赖文件
+# 复制后端代码
 COPY biz ./biz
 COPY api.py ./api.py
 COPY ui.py ./ui.py
 COPY main.py ./main.py
 COPY conf/prompt_templates.yml ./conf/prompt_templates.yml
 COPY conf/agents ./conf/
-COPY conf/supervisord.app.conf /etc/supervisor/supervisord.conf
-
-# 从构建阶段复制已安装的依赖
-COPY --from=backend-builder /install /usr/local/lib/python3.10/site-packages/
 
 # 创建必要的目录
 RUN mkdir -p /app/static /app/log /app/data
-
-# 从构建阶段复制前端文件
-COPY --from=frontend-builder /app/frontend/dist /app/static
 
 # 设置环境变量
 ENV PYTHONPATH=/app/
 ENV PYTHONUNBUFFERED=1
 
+# 主应用镜像
+FROM base AS app
+
+# 安装 supervisor
+RUN pip install supervisor
+
+# 复制 supervisor 配置
+COPY conf/supervisord.app.conf /etc/supervisor/supervisord.conf
+
+# 从构建阶段复制前端文件
+COPY --from=frontend-builder /app/frontend/dist /app/static
+
 # 暴露端口
 EXPOSE 5001
 
 # 使用supervisord管理进程
+CMD ["supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]
+
+# Worker 镜像
+FROM base AS worker
+
+# 安装 supervisor
+RUN pip install supervisor
+
+# 复制 worker 的 supervisor 配置
+COPY conf/supervisord.worker.conf /etc/supervisor/supervisord.conf
+
+# Worker 启动命令
 CMD ["supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]

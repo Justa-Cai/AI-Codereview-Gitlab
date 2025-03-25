@@ -13,6 +13,9 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [app, worker]
     permissions:
       contents: read
       packages: write
@@ -34,15 +37,16 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=sha,format=long
+            type=raw,value=${{ matrix.target }}
+            type=raw,value=${{ matrix.target }}-{{sha}}
+          flavor: |
+            suffix=-${{ matrix.target }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
           context: .
+          target: ${{ matrix.target }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }} 
