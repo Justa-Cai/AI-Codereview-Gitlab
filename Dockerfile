@@ -1,31 +1,63 @@
-# 使用官方的 Python 基础镜像
-FROM python:3.10-slim AS base
+# 前端构建阶段
+FROM node:18-slim AS frontend-builder
 
 # 设置工作目录
-WORKDIR /app
+WORKDIR /app/frontend
 
-# 安装 supervisord 作为进程管理工具
-RUN apt-get update && apt-get install -y --no-install-recommends supervisor && rm -rf /var/lib/apt/lists/*
+# 配置yarn使用淘宝镜像源
+ENV YARN_REGISTRY=https://registry.npmmirror.com
+ENV NODE_OPTIONS=--max_old_space_size=4096
 
-# 复制项目文件&创建必要的文件夹
+# 复制 package.json
+COPY ui/package*.json ./
+
+# 安装依赖并生成 yarn.lock
+RUN yarn install --registry=https://registry.npmmirror.com
+
+# 复制源代码
+COPY ui/ .
+
+# 构建前端
+RUN yarn build
+
+# 后端基础镜像
+FROM python:3.10-slim
+
+# 设置工作目录
+WORKDIR /app/
+
+# 设置pip使用国内镜像源
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip config set global.index-url ${PIP_INDEX_URL}
+
+# 安装 supervisor
+RUN pip install supervisor
+
+# 复制后端代码和依赖文件
 COPY requirements.txt .
+COPY biz ./biz
+COPY api.py ./api.py
+COPY ui.py ./ui.py
+COPY main.py ./main.py
+COPY conf/prompt_templates.yml ./conf/prompt_templates.yml
+COPY conf/agents ./conf/
+COPY conf/supervisord.app.conf /etc/supervisor/supervisord.conf
 
 # 安装依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN mkdir -p log data conf
-COPY biz ./biz
-COPY api.py ./api.py
-COPY ui.py ./ui.py
-COPY conf/prompt_templates.yml ./conf/prompt_templates.yml
+# 创建必要的目录
+RUN mkdir -p /app/static /app/log /app/data
 
-# 使用 supervisord 作为启动命令
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# 从构建阶段复制前端文件
+COPY --from=frontend-builder /app/frontend/dist /app/static
 
-FROM base AS app
-COPY conf/supervisord.app.conf /etc/supervisor/conf.d/supervisord.conf
-# 暴露 Flask 和 Streamlit 的端口
-EXPOSE 5001 5002
+# 设置环境变量
+ENV PYTHONPATH=/app/
+ENV PYTHONUNBUFFERED=1
 
-FROM base AS worker
-COPY ./conf/supervisord.worker.conf /etc/supervisor/conf.d/supervisord.conf
+# 暴露端口
+EXPOSE 5001
+
+# 使用supervisord管理进程
+CMD ["supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]

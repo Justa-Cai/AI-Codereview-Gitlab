@@ -1,6 +1,6 @@
 Flask==3.0.3
 APScheduler==3.10.4
-Flask==3.0.3
+flask-cors==4.0.0
 httpx[socks]
 matplotlib==3.10.1
 ollama==0.4.7
