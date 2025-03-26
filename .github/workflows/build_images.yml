@@ -54,7 +54,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=latest
+            type=edge,branch=main
 
       # Build and push multi-arch app image
       - name: Build and push app Docker image (Multi-Arch)
