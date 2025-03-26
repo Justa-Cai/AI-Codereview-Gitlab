@@ -1,5 +1,5 @@
 # 前端构建阶段
-FROM node:18-slim AS frontend-builder
+FROM node:18.19.1-slim AS frontend-builder
 
 # 设置工作目录
 WORKDIR /app/frontend
@@ -39,7 +39,7 @@ COPY ui/ .
 RUN yarn build
 
 # 后端基础镜像
-FROM python:3.10-slim AS backend-builder
+FROM python:3.10.13-slim AS backend-builder
 
 # 设置工作目录
 WORKDIR /app/
@@ -73,7 +73,7 @@ RUN pip install --no-cache-dir -r requirements.txt --target /install \
     --verbose
 
 # 基础运行时镜像
-FROM python:3.10-slim AS base
+FROM python:3.10.13-slim AS base
 
 # 设置工作目录
 WORKDIR /app/
