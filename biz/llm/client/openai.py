@@ -40,13 +40,17 @@ class OpenAIClient(BaseClient):
     def completions(self,
                     messages: List[Dict[str, str]],
                     model: Optional[str] | NotGiven = NOT_GIVEN,
+                    temperature: float = 0.7,
+                    max_tokens: Optional[int] = None,
                     ) -> str:
         model = model or self.default_model
         stream = os.getenv("OPENAI_API_STREAM", "false").lower() == "true"
         response = self.client.chat.completions.create(
             model=model,
             messages=messages,
-            stream=stream
+            stream=stream,
+            temperature=temperature,
+            max_tokens=max_tokens
         )
         if stream:
             content = ""

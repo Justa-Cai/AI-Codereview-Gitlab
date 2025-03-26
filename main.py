@@ -500,11 +500,12 @@ def filter_changes(changes: list):
     filter_deleted_files_changes = [change for change in changes if change.get("deleted_file") == False]
     # 从环境变量中获取支持的文件扩展名
     SUPPORTED_EXTENSIONS = os.getenv('SUPPORTED_EXTENSIONS', '.java,.py,.php').split(',')
-    # 过滤 `new_path` 以支持的扩展名结尾的元素, 仅保留diff和new_path字段
+    # 过滤 `new_path` 以支持的扩展名结尾的元素, 保留 diff、new_path 和 full_content 字段
     filtered_changes = [
         {
             'diff': item.get('diff', ''),
-            'new_path': item['new_path']
+            'new_path': item['new_path'],
+            'full_content': item.get('full_content', '')  # 保留完整文件内容
         }
         for item in filter_deleted_files_changes
         if any(item.get('new_path', '').endswith(ext) for ext in SUPPORTED_EXTENSIONS)
@@ -605,8 +606,55 @@ def review_code(changes_text: str, commits_text: str = '') -> str:
                     if not has_supported_files:
                         continue
                     
+                # 处理完整文件内容
+                get_full_content = os.getenv('GET_FULL_FILE_CONTENT', '0') == '1'
+                if get_full_content:
+                    try:
+                        # 解析 changes 数据
+                        if isinstance(changes_text, str):
+                            try:
+                                changes = ast.literal_eval(changes_text)
+                            except (SyntaxError, ValueError):
+                                changes = json.loads(changes_text)
+                        else:
+                            changes = changes_text
+                            
+                        # 为每个变更添加完整文件内容
+                        for change in changes:
+                            if isinstance(change, dict) and 'full_content' in change:
+                                # 将完整内容添加到 diff 中
+                                change['diff'] = f"完整文件内容:\n{change['full_content']}\n\n变更部分:\n{change.get('diff', '')}"
+                    except Exception as e:
+                        logger.error(f"Error processing full file content: {str(e)}")
+                
+                # 打印调用大模型接口的数据
+                logger.info("=== 调用大模型接口的数据 ===")
+                logger.info(f"Agent: {agent}")
+                logger.info(f"System Prompt: {system_prompt}")
+                logger.info(f"User Prompt: {user_prompt}")
+                logger.info(f"Changes Text: {changes_text}")
+                logger.info(f"Commits Text: {commits_text}")
+                logger.info("==========================")
+                
+                # 确保 changes_text 是字符串格式，并包含完整内容
+                if isinstance(changes_text, (list, dict)):
+                    changes_text = json.dumps(changes_text, ensure_ascii=False)
+                
+                # 如果启用了完整内容获取，确保完整内容被包含在发送给大模型的数据中
+                if get_full_content:
+                    try:
+                        # 使用 ast.literal_eval 安全地解析 Python 字面量
+                        changes_data = ast.literal_eval(changes_text)
+                        if isinstance(changes_data, list):
+                            for change in changes_data:
+                                if isinstance(change, dict) and 'full_content' in change:
+                                    change['diff'] = f"完整文件内容:\n{change['full_content']}\n\n变更部分:\n{change.get('diff', '')}"
+                        changes_text = json.dumps(changes_data, ensure_ascii=False)
+                    except Exception as e:
+                        logger.error(f"Error processing full content for LLM: {str(e)}")
+                
                 review_result = CodeReviewer().review_code(
-                    str(changes_text),  # 确保传入字符串
+                    changes_text,  # 现在包含了完整文件内容
                     commits_text,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt
@@ -626,7 +674,7 @@ def review_code(changes_text: str, commits_text: str = '') -> str:
     if not all_reviews:
         return "代码评审失败，请检查配置和日志"
         
-    logger.info("LLM Response: %s", "\n\n".join(all_reviews))
+    # logger.info("LLM Response: %s", "\n\n".join(all_reviews))
     return "\n\n".join(all_reviews)
 
 

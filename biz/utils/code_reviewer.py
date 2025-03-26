@@ -2,7 +2,9 @@ import os
 import re
 import yaml
 import abc
+import json
 from typing import Dict, List, Optional
+import traceback
 
 from biz.utils.log import logger
 from biz.llm.factory import Factory
@@ -106,50 +108,74 @@ class BaseReviewer(abc.ABC):
             logger.error(f"Error loading default configuration: {str(e)}")
         return {}
 
-    def review_code(self, diffs_text: str, commits_text: str = "", system_prompt: str = None, user_prompt: str = None) -> str:
-        """Review代码，并返回所有启用的Agent的结果"""
-        if system_prompt and user_prompt:
-            # 如果提供了自定义的提示词，直接使用
-            messages = [
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": user_prompt.format(
-                        diffs_text=diffs_text,
-                        commits_text=commits_text
-                    )
-                }
-            ]
-            return self.call_llm(messages)
-            
-        # 如果没有提供自定义提示词，使用默认的agents
-        if not self.agents:
-            logger.error("No agents available for code review")
-            return "No agents available for code review"
-            
-        all_results = []
-        for agent_name, prompts in self.agents.items():
+    def review_code(self, diffs_text: str, commits_text: str = '', system_prompt: str = None, user_prompt: str = None) -> str:
+        """
+        评审代码
+        :param diffs_text: 代码变更内容
+        :param commits_text: 提交信息
+        :param system_prompt: 系统提示词
+        :param user_prompt: 用户提示词
+        :return: 评审结果
+        """
+        try:
+            # 尝试解析 diffs_text
             try:
-                messages = [
-                    prompts["system_message"],
-                    {
-                        "role": "user",
-                        "content": prompts["user_message"]["content"].format(
-                            diffs_text=diffs_text,
-                            commits_text=commits_text
-                        )
-                    }
-                ]
-                result = self.call_llm(messages)
-                all_results.append(f"### {agent_name} 的评审结果\n\n{result}")
-            except Exception as e:
-                logger.error(f"Error in agent {agent_name}: {str(e)}")
-                all_results.append(f"### {agent_name} 评审失败\n\n{str(e)}")
-                
-        return "\n\n".join(all_results)
+                if isinstance(diffs_text, str):
+                    # 尝试解析 JSON 字符串
+                    diffs_data = json.loads(diffs_text)
+                else:
+                    diffs_data = diffs_text
+            except json.JSONDecodeError:
+                # 如果 JSON 解析失败，保持原始字符串
+                diffs_data = diffs_text
+
+            # 处理完整文件内容
+            if isinstance(diffs_data, list):
+                formatted_changes = []
+                for change in diffs_data:
+                    if isinstance(change, dict):
+                        formatted_change = {
+                            'file_path': change.get('new_path', change.get('old_path', '')),
+                            'change_type': change.get('change_type', 'modified'),
+                            'diff': change.get('diff', ''),
+                            'full_content': change.get('full_content', '')
+                        }
+                        formatted_changes.append(formatted_change)
+                diffs_data = formatted_changes
+
+            # 确保 diffs_text 是字符串格式
+            if isinstance(diffs_data, (list, dict)):
+                diffs_text = json.dumps(diffs_data, ensure_ascii=False, indent=2)
+
+            # 构建发送给大模型的消息
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            if user_prompt:
+                messages.append({"role": "user", "content": user_prompt.format(
+                    diffs_text=diffs_text,
+                    commits_text=commits_text
+                )})
+
+            # 打印发送给大模型的数据
+            logger.info("=== 发送给大模型的数据 ===")
+            logger.info(f"Messages: {messages}")
+            logger.info("==========================")
+
+            # 调用大模型
+            response = self.call_llm(messages)
+            
+            # 打印大模型返回的结果
+            logger.info("=== 大模型返回结果 ===")
+            logger.info(f"Response: {response}")
+            logger.info("==========================")
+            
+            return response
+
+        except Exception as e:
+            logger.error(f"Error in review_code: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            return f"代码评审失败: {str(e)}"
 
     @staticmethod
     def parse_review_score(review_text: str) -> int:
@@ -167,16 +193,92 @@ class CodeReviewer(BaseReviewer):
         super().__init__("code_review")
         
     def call_llm(self, messages: List[Dict[str, str]]) -> str:
-        """调用 LLM 进行代码审查"""
+        """
+        调用大模型
+        :param messages: 消息列表
+        :return: 大模型返回的结果
+        """
         try:
+            # 打印发送给大模型的数据
+            logger.info("=== 发送给大模型的数据 ===")
+            logger.info(f"Messages: {messages}")
+            logger.info("==========================")
+
+            # 调用大模型
             response = self.client.completions(
                 messages=messages,
-                model=os.getenv('OPENAI_API_MODEL', 'gpt-3.5-turbo')
+                temperature=0.7,
+                max_tokens=2000
             )
-            # 记录 LLM 返回结果
-            logger.info("LLM Response: %s", response)
+
+            # 打印大模型返回的结果
+            logger.info("=== 大模型返回结果 ===")
+            logger.info(f"Response: {response}")
+            logger.info("==========================")
+
             return response
+
         except Exception as e:
-            logger.error(f"Error calling LLM: {str(e)}")
-            return f"Error calling LLM: {str(e)}"
+            logger.error(f"Error in call_llm: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            return f"调用大模型失败: {str(e)}"
+
+    def review_and_strip_code(self, diffs_text: str, commits_text: str = '') -> str:
+        """
+        评审代码并处理完整文件内容
+        :param diffs_text: 代码变更内容
+        :param commits_text: 提交信息
+        :return: 评审结果
+        """
+        try:
+            # 尝试解析 diffs_text
+            try:
+                if isinstance(diffs_text, str):
+                    # 尝试解析 JSON 字符串
+                    diffs_data = json.loads(diffs_text)
+                else:
+                    diffs_data = diffs_text
+            except json.JSONDecodeError:
+                # 如果 JSON 解析失败，保持原始字符串
+                diffs_data = diffs_text
+
+            # 处理完整文件内容
+            if isinstance(diffs_data, list):
+                for change in diffs_data:
+                    if isinstance(change, dict) and 'full_content' in change:
+                        # 将完整内容添加到 diff 中
+                        change['diff'] = f"完整文件内容:\n{change['full_content']}\n\n变更部分:\n{change.get('diff', '')}"
+
+            # 确保 diffs_text 是字符串格式
+            if isinstance(diffs_data, (list, dict)):
+                diffs_text = json.dumps(diffs_data, ensure_ascii=False)
+
+            # 加载默认配置
+            config = self._load_default_config()
+            if not config:
+                return "无法加载默认配置"
+
+            # 构建消息
+            messages = []
+            system_message = config.get('code_review', {}).get('system_message')
+            user_message = config.get('code_review', {}).get('user_message')
+            
+            if system_message:
+                messages.append(system_message)
+            if user_message:
+                messages.append({
+                    "role": "user",
+                    "content": user_message['content'].format(
+                        diffs_text=diffs_text,
+                        commits_text=commits_text
+                    )
+                })
+
+            # 调用大模型
+            return self.call_llm(messages)
+
+        except Exception as e:
+            logger.error(f"Error in review_and_strip_code: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            return f"代码评审失败: {str(e)}"
 

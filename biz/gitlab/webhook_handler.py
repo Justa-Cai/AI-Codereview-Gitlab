@@ -19,11 +19,12 @@ def filter_changes(changes: list):
     '''
     filter_deleted_files_changes = [change for change in changes if change.get("deleted_file") == False]
 
-    # 过滤 `new_path` 以支持的扩展名结尾的元素, 仅保留diff和new_path字段
+    # 过滤 `new_path` 以支持的扩展名结尾的元素, 保留 diff、new_path 和 full_content 字段
     filtered_changes = [
         {
             'diff': item.get('diff', ''),
-            'new_path': item['new_path']
+            'new_path': item['new_path'],
+            'full_content': item.get('full_content', '')  # 保留完整文件内容
         }
         for item in filter_deleted_files_changes
         if any(item.get('new_path', '').endswith(ext) for ext in SUPPORTED_EXTENSIONS)
@@ -246,6 +247,28 @@ class PushHandler:
             return commits[0].get('parent_ids', [])[0]
         return ""
 
+    def get_file_content(self, file_path: str, ref: str) -> str:
+        """
+        获取指定文件在特定提交中的完整内容
+        :param file_path: 文件路径
+        :param ref: 提交引用（可以是分支名、标签或提交ID）
+        :return: 文件内容
+        """
+        url = urljoin(f"{self.gitlab_url}/",
+                     f"api/v4/projects/{self.project_id}/repository/files/{file_path}/raw")
+        params = {'ref': ref}
+        headers = {
+            'Private-Token': self.gitlab_token
+        }
+        response = requests.get(url, headers=headers, params=params, verify=False)
+        logger.debug(f"Get file content response: {response.status_code}, {response.text}")
+        
+        if response.status_code == 200:
+            return response.text
+        else:
+            logger.warn(f"Failed to get file content: {response.status_code}, {response.text}")
+            return ""
+
     def repository_compare(self, before: str, after: str):
         # 比较两个提交之间的差异
         url = f"{urljoin(f'{self.gitlab_url}/', f'api/v4/projects/{self.project_id}/repository/compare')}?from={before}&to={after}"
@@ -257,7 +280,20 @@ class PushHandler:
             f"Get changes response from GitLab for repository_compare: {response.status_code}, {response.text}, URL: {url}")
 
         if response.status_code == 200:
-            return response.json().get('diffs', [])
+            diffs = response.json().get('diffs', [])
+            # 检查是否需要获取完整文件内容
+            get_full_content = os.getenv('GET_FULL_FILE_CONTENT', '0') == '1'
+            
+            if get_full_content:
+                for diff in diffs:
+                    file_path = diff.get('new_path')
+                    if file_path:
+                        # 获取文件的完整内容
+                        full_content = self.get_file_content(file_path, after)
+                        if full_content:
+                            # 将完整内容添加到diff中
+                            diff['full_content'] = full_content
+            return diffs
         else:
             logger.warn(
                 f"Failed to get changes for repository_compare: {response.status_code}, {response.text}")

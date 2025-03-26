@@ -11,6 +11,20 @@ class BaseClient:
     def completions(self,
                     messages: List[Dict[str, str]],
                     model: Optional[str] | NotGiven = NOT_GIVEN,
+                    temperature: float = 0.7,
+                    max_tokens: Optional[int] = None,
                     ) -> str:
         """Chat with the model.
         """
+        pass
+
+    @abstractmethod
+    def stream_completions(self,
+                          messages: List[Dict[str, str]],
+                          model: Optional[str] | NotGiven = NOT_GIVEN,
+                          temperature: float = 0.7,
+                          max_tokens: Optional[int] = None,
+                          ) -> str:
+        """Stream chat with the model.
+        """
+        pass
